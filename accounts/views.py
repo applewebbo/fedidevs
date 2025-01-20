@@ -219,7 +219,7 @@ def index(request, lang: str | None = None):
         reverse=True,
     )
 
-    search_query = Q(accountlookup__isnull=False)
+    search_query = Q(accountlookup__isnull=False, instance_model__deleted_at__isnull=True)
     if selected_lang:
         search_query &= Q(accountlookup__language__icontains=selected_lang.code + "\n")
     if selected_framework:
@@ -366,13 +366,13 @@ def switch_account_type(_, accountlookup_id: int, account_type: str):
         to_switch = "H"
 
     return HttpResponse(
-        f"""<button hx-post="{reverse("switch_account_type", args=[accountlookup_id, to_switch])}" hx-target="#switch_account_type" hx-swap="innerHTML">Switch to {"Human" if to_switch == 'H' else "Project"}</button>"""
+        f"""<button hx-post="{reverse("switch_account_type", args=[accountlookup_id, to_switch])}" hx-target="#switch_account_type" hx-swap="innerHTML">Switch to {"Human" if to_switch == "H" else "Project"}</button>"""
     )
 
 
 @cache_page(60 * 60 * 24, cache="memory")
 def faq(request):
-    instances = Instance.objects.values("instance", "deleted_at")
+    instances = Instance.objects.filter(deleted_at__isnull=False).values("instance")
     return render(
         request,
         "faq.html",

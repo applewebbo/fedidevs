@@ -2,6 +2,7 @@ import logging
 from uuid import uuid4
 
 import dramatiq
+import httpx
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
@@ -29,28 +30,11 @@ from stats.models import FollowClick
 logger = logging.getLogger(__name__)
 app_scopes = (
     "read:accounts",
-    "read:blocks",
-    "read:favourites",
-    "read:filters",
     "read:follows",
-    "read:lists",
-    "read:mutes",
-    "read:notifications",
     "read:search",
-    "read:statuses",
-    "read:bookmarks",
-    "write:accounts",
-    "write:blocks",
-    "write:favourites",
-    "write:filters",
     "write:follows",
+    "read:lists",
     "write:lists",
-    "write:media",
-    "write:mutes",
-    "write:notifications",
-    "write:reports",
-    "write:statuses",
-    "write:bookmarks",
 )
 login_scopes = ("read:accounts", "read:follows", "write:follows", "read:search")
 
@@ -69,6 +53,14 @@ def login(request):
     if "@" in api_base_url:
         api_base_url = api_base_url.split("@")[-1]
 
+    try:
+        res = httpx.get(f"https://{api_base_url}/.well-known/host-meta")
+        if 300 <= res.status_code < 400:
+            logger.info("Redirected to %s", res.headers["Location"])
+            api_base_url = res.headers["Location"].split("/")[2]
+    except httpx.RequestError:
+        logger.warning("Failed to get host-meta for %s", api_base_url)
+
     instance = Instance.objects.filter(url=api_base_url).first()
 
     if not instance:
@@ -79,6 +71,7 @@ def login(request):
                 redirect_uris=settings.MSTDN_REDIRECT_URI,
                 website="https://fedidevs.com",
                 api_base_url=api_base_url,
+                user_agent="fedidevs",
             )
         except MastodonNetworkError:
             messages.error(request, _("Network error, is the instance url correct?") + f" `{api_base_url}`")
@@ -124,6 +117,7 @@ def logout(request):
     #     client_secret=user.account.instance.client_secret,
     #     api_base_url=user.account.instance.url,
     #     access_token=user.account.access_token,
+    #     user_agent="fedidevs",
     # )
     # mastodon.revoke_access_token()
     # AccountAccess.objects.filter(user=request.user).delete()

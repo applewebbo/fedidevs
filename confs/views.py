@@ -219,11 +219,12 @@ def conference(request, conference_slug: str):
         }
         for i, date in enumerate(dates)
     ]
+
     conf_posts = (
         ConferencePost.objects.annotate(
             created_at_date=Trunc("created_at", "day", tzinfo=zoneinfo.ZoneInfo(conference.time_zone))
         )
-        .filter(search_query)
+        .filter(search_query & Q(post__account__instance_model__deleted_at__isnull=True))
         .order_by(order)
         .prefetch_related("post", "post__account", "post__account__accountlookup", "post__account__instance_model")
     )
@@ -231,7 +232,7 @@ def conference(request, conference_slug: str):
     account_counts = (
         ConferenceAccount.objects.filter(conference=conference)
         .select_related("account")
-        .filter(count__gt=0)
+        .filter(count__gt=0, account__instance_model__deleted_at__isnull=True)
         .order_by("-count")[:10]
     )
 
@@ -342,7 +343,7 @@ def fwd50(request, date: dt.date | None = None):
     dates = [
         {
             "value": date,
-            "pre_display": f"Day {i+1}",
+            "pre_display": f"Day {i + 1}",
             "display": date,
             "count": counts_dict.get(date, 0),
         }
@@ -441,7 +442,7 @@ def djangoconafrica(request, date: dt.date | None = None):
     dates = [
         {
             "value": date,
-            "pre_display": f"Day {i+1}",
+            "pre_display": f"Day {i + 1}",
             "display": date,
             "count": counts_dict.get(date, 0),
         }
@@ -544,7 +545,7 @@ def dotnetconf(request, date: dt.date | None = None):
     dates = [
         {
             "value": date,
-            "pre_display": f"Day {i+1}",
+            "pre_display": f"Day {i + 1}",
             "display": date,
             "count": counts_dict.get(date, 0),
         }

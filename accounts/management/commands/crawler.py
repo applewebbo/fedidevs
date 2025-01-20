@@ -6,6 +6,7 @@ from json import JSONDecodeError
 import httpx
 from asgiref.sync import async_to_sync
 from django.contrib.humanize.templatetags.humanize import naturaltime
+from django.db import ProgrammingError
 from django.utils import timezone
 from django_rich.management import RichCommand
 
@@ -107,38 +108,48 @@ class Command(RichCommand):
                         if account.get("id")
                     ]
                 inserted_accounts = fetched_accounts
-
-                await Account.objects.abulk_create(
-                    inserted_accounts,
-                    unique_fields=["account_id", "instance"],
-                    update_conflicts=["account_id", "instance"],
-                    update_fields=[
-                        "username",
-                        "username_at_instance",
-                        "acct",
-                        "display_name",
-                        "locked",
-                        "bot",
-                        "discoverable",
-                        "group",
-                        "noindex",
-                        "last_status_at",
-                        "last_sync_at",
-                        "followers_count",
-                        "following_count",
-                        "statuses_count",
-                        "note",
-                        "url",
-                        "avatar",
-                        "avatar_static",
-                        "header",
-                        "header_static",
-                        "emojis",
-                        "roles",
-                        "fields",
-                        "instance_model",
-                    ],
-                )
+                try:
+                    await Account.objects.abulk_create(
+                        inserted_accounts,
+                        unique_fields=["account_id", "instance"],
+                        update_conflicts=["account_id", "instance"],
+                        update_fields=[
+                            "username",
+                            "username_at_instance",
+                            "acct",
+                            "display_name",
+                            "locked",
+                            "bot",
+                            "discoverable",
+                            "group",
+                            "noindex",
+                            "last_status_at",
+                            "last_sync_at",
+                            "followers_count",
+                            "following_count",
+                            "statuses_count",
+                            "note",
+                            "url",
+                            "avatar",
+                            "avatar_static",
+                            "header",
+                            "header_static",
+                            "emojis",
+                            "roles",
+                            "fields",
+                            "instance_model",
+                        ],
+                    )
+                except ProgrammingError:
+                    logger.warning(
+                        "Faled to insert",
+                        extra={
+                            "inserted_accounts": [
+                                f"{account.instance} {account.account_id}" for account in inserted_accounts
+                            ]
+                        },
+                    )
+                    inserted_accounts = []
                 if fetched_accounts:
                     self.console.print(
                         f"Fetched {len(fetched_accounts)}, inserted {len(inserted_accounts)}. Current offset {offset}. Max last_status_at {naturaltime(max(account.last_status_at for account in fetched_accounts if account.last_status_at))}"

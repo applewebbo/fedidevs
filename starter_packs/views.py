@@ -7,10 +7,10 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.contrib.postgres.search import SearchQuery
-from django.core import management
 from django.core.paginator import Paginator
 from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, OuterRef, Q
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -26,7 +26,8 @@ from mastodon import (
     MastodonVersionError,
 )
 
-from accounts.models import Account
+from accounts.management.commands.crawlone import crawlone
+from accounts.models import Account, Instance
 from mastodon_auth.models import AccountFollowing
 from starter_packs.models import StarterPack, StarterPackAccount
 from stats.models import FollowAllClick
@@ -42,7 +43,7 @@ def starter_packs(request):
 
     starter_packs = StarterPack.objects.none()
     if tab == "community":
-        starter_packs = StarterPack.objects.all()
+        starter_packs = StarterPack.objects.filter(published_at__isnull=False)
     elif tab == "your" and not request.user.is_anonymous:
         starter_packs = StarterPack.objects.filter(created_by=request.user)
     elif tab == "containing" and not request.user.is_anonymous:
@@ -91,7 +92,9 @@ def starter_packs(request):
             "page": "starter_packs",
             "page_url": reverse("starter_packs"),
             "page_title": _("Mastodon Starter Pack Directory | Fedidevs"),
-            "page_description": "Discover, create, and share Mastodon starter packs to help new users find interesting accounts to follow.",
+            "page_description": _(
+                "Discover, create, and share Mastodon starter packs to help new users find interesting accounts to follow."
+            ),
             "page_header": "FEDIDEVS",
             "page_image": "og-starterpacks.png",
             "page_subheader": "",
@@ -131,26 +134,53 @@ def add_accounts_to_starter_pack(request, starter_pack_slug):
     is_username = False
     if q := request.GET.get("q", ""):
         search = q.strip().lower()
+        if search[0] != "@":
+            search = "@" + search
         if username_regex.match(search):
             logger.info("Searching for username %s", search)
             is_username = True
             accounts = accounts.filter(
                 username_at_instance=search,
                 discoverable=True,
+                instance_model__deleted_at__isnull=True,
             )
             if not accounts.exists():
                 logger.info("Username not found, crawling the instance")
-                management.call_command("crawlone", user=search[1:])
-                accounts = Account.objects.filter(
-                    username_at_instance=search,
-                )
+                instance_name = search.split("@")[2]
+                if Instance.objects.filter(instance=instance_name, deleted_at__isnull=False).exists():
+                    logger.info("Instance is deleted")
+                    return render(
+                        request,
+                        "add_accounts.html",
+                        {
+                            "page": "starter_packs",
+                            "page_title": _("Add accounts to your starter pack"),
+                            "page_description": "Add accounts to your starter pack to help new users find interesting accounts to follow.",
+                            "page_header": "FEDIDEVS",
+                            "page_subheader": "",
+                            "q": q,
+                            "is_username": is_username,
+                            "num_accounts": StarterPackAccount.objects.filter(
+                                account__discoverable=True, starter_pack=starter_pack
+                            ).count(),
+                            "accounts": accounts,
+                            "starter_pack": starter_pack,
+                            "deleted_instance": instance_name,
+                        },
+                    )
+                account = crawlone(user=search[1:])
+                if account:
+                    accounts = Account.objects.filter(
+                        username_at_instance=account.username_at_instance,
+                    )
         else:
             logger.info("Using full text search for %s", search)
             accounts = accounts.filter(
                 search=SearchQuery(search, search_type="websearch"),
+                instance_model__deleted_at__isnull=True,
             )
 
-    paginator = Paginator(accounts, 50)
+    paginator = Paginator(accounts.order_by("-followers_count"), 50)
     page_number = request.GET.get("page")
     page_obj = paginator.get_page(page_number)
 
@@ -165,6 +195,52 @@ def add_accounts_to_starter_pack(request, starter_pack_slug):
             "page_subheader": "",
             "q": q,
             "is_username": is_username,
+            "num_accounts": StarterPackAccount.objects.filter(
+                account__discoverable=True, starter_pack=starter_pack
+            ).count(),
+            "accounts": page_obj,
+            "starter_pack": starter_pack,
+        },
+    )
+
+
+@login_required
+def review_starter_pack(request, starter_pack_slug):
+    starter_pack = get_object_or_404(
+        StarterPack, slug=starter_pack_slug, created_by=request.user, deleted_at__isnull=True
+    )
+    accounts = (
+        Account.objects.filter()
+        .prefetch_related("instance_model")
+        .annotate(
+            in_starter_pack=Exists(
+                StarterPackAccount.objects.filter(
+                    starter_pack=starter_pack,
+                    account_id=OuterRef("pk"),
+                )
+            ),
+            is_followed=Exists(
+                AccountFollowing.objects.filter(account=request.user.accountaccess.account, url=OuterRef("url")),
+            ),
+        )
+        .filter(in_starter_pack=True, instance_model__deleted_at__isnull=True)
+        .order_by("-is_followed", "-followers_count")
+    )
+
+    paginator = Paginator(accounts, 50)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    return render(
+        request,
+        "review_starter_pack_list.html" if "HX-Request" in request.headers else "review_starter_pack.html",
+        {
+            "page": "starter_packs",
+            "page_title": _("Review your starter pack"),
+            "page_description": _("Review your starter pack to make sure everything is in order."),
+            "page_header": "FEDIDEVS",
+            "page_subheader": "",
+            "review": True,
             "num_accounts": StarterPackAccount.objects.filter(
                 account__discoverable=True, starter_pack=starter_pack
             ).count(),
@@ -193,7 +269,7 @@ def edit_starter_pack(request, starter_pack_slug):
         {
             "page": "starter_packs",
             "page_title": _("Edit your starter pack"),
-            "page_description": "Edit your starter pack to help new users find interesting accounts to follow.",
+            "page_description": _("Edit your starter pack to help new users find interesting accounts to follow."),
             "page_header": "FEDIDEVS",
             "page_subheader": "",
             "form": form,
@@ -229,12 +305,27 @@ def create_starter_pack(request):
         {
             "page": "starter_packs",
             "page_title": _("Create a new starter pack"),
-            "page_description": "Create a new starter pack to help new users find interesting accounts to follow.",
+            "page_description": _("Create a new starter pack to help new users find interesting accounts to follow."),
             "page_header": "FEDIDEVS",
             "page_subheader": "",
             "form": form,
         },
     )
+
+
+@transaction.atomic
+def publish_starter_pack(request, starter_pack_slug):
+    starter_pack = get_object_or_404(StarterPack, slug=starter_pack_slug, created_by=request.user)
+    if request.method == "POST":
+        if starter_pack.published_at:
+            starter_pack.published_at = None
+        else:
+            starter_pack.published_at = timezone.now()
+        starter_pack.save(update_fields=["published_at", "updated_at"])
+
+    response = HttpResponse()
+    response["HX-Redirect"] = reverse("share_starter_pack", kwargs={"starter_pack_slug": starter_pack.slug})
+    return response
 
 
 @transaction.atomic
@@ -268,6 +359,7 @@ def toggle_account_to_starter_pack(request, starter_pack_slug, account_id):
         "starter_pack_stats.html",
         {
             "starter_pack": starter_pack,
+            "review": request.POST.get("review"),
             "num_accounts": StarterPackAccount.objects.filter(starter_pack=starter_pack).count(),
         },
     )
@@ -278,6 +370,7 @@ def share_starter_pack(request, starter_pack_slug):
     accounts = (
         Account.objects.filter(
             starterpackaccount__starter_pack=starter_pack,
+            instance_model__deleted_at__isnull=True,
             discoverable=True,
         )
         .select_related("accountlookup", "instance_model")
@@ -309,7 +402,7 @@ def share_starter_pack(request, starter_pack_slug):
             "page_description": starter_pack.description,
             "starter_pack": starter_pack,
             "num_accounts": accounts.count(),
-            "num_hidden_accounts": Account.objects.exclude(discoverable=True)
+            "num_hidden_accounts": Account.objects.exclude(discoverable=True, instance_model__deleted_at__isnull=True)
             .filter(starterpackaccount__starter_pack=starter_pack)
             .count(),
             "accounts": page_obj,
@@ -340,6 +433,7 @@ def follow_starter_pack(request, starter_pack_slug):
     starter_pack = get_object_or_404(StarterPack, slug=starter_pack_slug, deleted_at__isnull=True)
     accounts = Account.objects.filter(
         starterpackaccount__starter_pack=starter_pack,
+        instance_model__deleted_at__isnull=True,
     ).select_related("accountlookup", "instance_model")
     account_following = []
     for account in accounts:
@@ -368,6 +462,7 @@ def follow_bg(user_id: int, starter_pack_slug: str):
 
     starter_pack_accounts = Account.objects.filter(
         starterpackaccount__starter_pack__slug=starter_pack_slug,
+        instance_model__deleted_at__isnull=True,
         discoverable=True,
     )
 

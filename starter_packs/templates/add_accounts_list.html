@@ -4,7 +4,7 @@
     id="accounts_target"
     class="divide-y divide-gray-200 dark:divide-gray-700">
     {% for account in accounts %}
-        <li class="py-3 sm:py-4 px-3">
+        <li class="py-3 sm:py-4 px-6">
             <div class="flex items-center space-x-3 rtl:space-x-reverse">
                 <div class="flex-shrink-0">
                     <img class="w-8 h-8 rounded-full" src="{{ account.avatar }}" alt="PIC">
@@ -37,7 +37,20 @@
             </div>
         </li>
     {% empty %}
-        {% if is_username %}
+        {% if deleted_instance %}
+            <li class="p-8 prose dark:prose-invert">
+                <h2 class="text-center">
+                    {% blocktrans trimmed %}
+                        Instance <i>`{{ deleted_instance }}`</i> was deleted 😞
+                    {% endblocktrans %}
+                </h2>
+                <p>
+                    {% blocktrans trimmed %}
+                        The instance Admin has requested to remove the instance.
+                    {% endblocktrans %}
+                </p>
+            </li>
+        {% elif is_username %}
             <li class="p-8 prose dark:prose-invert">
                 <h2 class="text-center">{% trans "No results found 😞" %}</h2>
                 <p>
